@@ -149,7 +149,8 @@ func doSender(sender host.Host, relayinfo *peer.AddrInfo, fullLAddr string) {
 	// relayed connection. In general, we should only do this if we have low bandwidth requirements,
 	// and we're happy for the connection to be killed when the relayed connection is replaced with a
 	// direct (holepunched) connection.
-	s, err := sender.NewStream(network.WithUseTransient(context.Background(), "/chat/1.0.0"), receiverID, "/chat/1.0.0")
+	// remove the transient feture: we now changed the server
+	s, err := sender.NewStream(context.Background(), receiverID, "/chat/1.0.0")
 	if err != nil {
 		log.Println("Whoops, this should have worked...: ", err)
 		return
