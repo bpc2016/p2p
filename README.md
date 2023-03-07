@@ -41,6 +41,7 @@ This was developed from the [excellent circuitv2 example](https://github.com/lib
 * Add peer discovery
 * Remove limits on the relay (looks easy - use an opt) 
 * Add pubsub
+* Where is the hole-punching example to build on ??
 
 ## Author
 Busiso Chisala
