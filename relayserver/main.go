@@ -40,7 +40,7 @@ func main() {
 	listenF := flag.Int("l", 8919, "wait for incoming connections")
 	flag.Parse()
 
-	// setup the relay host (full regalia, as in echo)
+	// setup the relay host - with  nonzero seed will haave a fixed address
 	var r io.Reader
 	if *seedF == 0 {
 		r = rand.Reader
@@ -74,11 +74,29 @@ func main() {
 	// "dedicated" relay services.
 	// In circuit relay v2 (which we're using here!) it is rate limited so that
 	// any node can offer this service safely
-	_, err = relay.New(relayHost)
+	// do so with an option that keeps the stream alive indefinitely
+	_, err = relay.New(relayHost, relay.WithInfiniteLimits())
 	if err != nil {
 		log.Printf("Failed to instantiate the relay: %v", err)
 		return
 	}
+
+	/*
+		// we want to keep looking at its peerstrore
+		go func() {
+			// old := peer.IDSlice{}
+			for {
+				time.Sleep(1 * time.Minute)
+				idslice := relayHost.Peerstore().PeersWithAddrs()
+				// if len(idslice) == len(old) {
+				// 	continue
+				// }
+				log.Printf("ids: %v\n", idslice)
+				// old = idslice
+			}
+		}()
+
+	*/
 
 	// Run until canceled.
 	<-ctx.Done()
