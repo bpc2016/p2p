@@ -56,16 +56,16 @@ func main() {
 		return
 	}
 	// Create a host to act as a middleman to relay messages on our behalf
-	relay1, err := libp2p.New(
+	relayHost, err := libp2p.New(
 		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", *listenF)),
 		libp2p.Identity(priv),
 	)
 	if err != nil {
-		log.Printf("Failed to create relay1: %v", err)
+		log.Printf("Failed to create relayHost: %v", err)
 		return
 	}
 
-	fullAddr := getHostAddress(relay1)
+	fullAddr := getHostAddress(relayHost)
 	log.Printf("Relay is: %s\nUse this address in setting up relay services", fullAddr)
 
 	// Configure the host to offer the ciruit relay service.
@@ -74,7 +74,7 @@ func main() {
 	// "dedicated" relay services.
 	// In circuit relay v2 (which we're using here!) it is rate limited so that
 	// any node can offer this service safely
-	_, err = relay.New(relay1)
+	_, err = relay.New(relayHost)
 	if err != nil {
 		log.Printf("Failed to instantiate the relay: %v", err)
 		return

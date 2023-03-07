@@ -45,7 +45,7 @@ func main() {
 
 	// flags
 	relayF := flag.String("r", "", "relay host full address")
-	mirrorF := flag.String("m", "", "mirror receiver host full address")
+	targetF := flag.String("t", "", "target (receiver) host full address")
 	flag.Parse()
 
 	if *relayF == "" {
@@ -78,10 +78,10 @@ func main() {
 		return
 	}
 
-	if *mirrorF == "" { // we are a receiver
+	if *targetF == "" { // we are a receiver
 		doReceiver(hs, relayinfo)
 	} else {
-		doSender(hs, relayinfo, *mirrorF)
+		doSender(hs, relayinfo, *targetF)
 	}
 	// wait for connections, close with ^C
 	<-ctx.Done()
