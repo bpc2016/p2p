@@ -74,12 +74,10 @@ func main() {
 	go func(app *application) {
 		for {
 			p := <-app.found
-			// count from 1
-			i := 0
-			for range app.store {
-				i++
+			if app.store[p.ID.String()] != "" {
+				continue // dont kill our label
 			}
-			label := fmt.Sprintf("%d", i+1)
+			label := fmt.Sprintf("%d", len(app.store)+1)
 			app.store[p.ID.String()] = label
 			app.restore[label] = p.ID.String() // do we want a map into peers?
 		}
@@ -184,7 +182,6 @@ func (app *application) fetchMore(ctx context.Context, routingDiscovery *droutin
 				}
 			} else {
 				// silently add new found
-				// app.store[peerAD] = true
 				app.found <- peer
 			}
 		}
@@ -216,6 +213,9 @@ func (app *application) printMessagesFrom(ctx context.Context, sub *pubsub.Subsc
 			continue
 		}
 		from := app.store[m.ReceivedFrom.String()]
+		if from == "" {
+			from = "me"
+		}
 		fmt.Println(from, ": ", line)
 	}
 }
