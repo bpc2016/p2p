@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	mrand "math/rand"
+	"time"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -81,22 +82,15 @@ func main() {
 		return
 	}
 
-	/*
-		// we want to keep looking at its peerstrore
-		go func() {
-			// old := peer.IDSlice{}
-			for {
-				time.Sleep(1 * time.Minute)
-				idslice := relayHost.Peerstore().PeersWithAddrs()
-				// if len(idslice) == len(old) {
-				// 	continue
-				// }
-				log.Printf("ids: %v\n", idslice)
-				// old = idslice
-			}
-		}()
-
-	*/
+	// we want to keep looking at attached hosts
+	go func() {
+		for {
+			time.Sleep(1 * time.Minute)
+			// fetch the mas of connected peers
+			ids := relayHost.Network().Peers()
+			log.Printf("ids: %v\n", ids)
+		}
+	}()
 
 	// Run until canceled.
 	<-ctx.Done()
