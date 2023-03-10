@@ -3,13 +3,12 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -20,17 +19,12 @@ import (
 	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 )
 
-var (
-	topicNameF = flag.String("topicName", "chinangwa", "name of topic to join")
-	portF      = flag.Int("p", 0, "port to use")
-)
-
-type application struct {
-	store, restore map[string]string
-	found          chan peer.AddrInfo
-}
-
 func main() {
+	portF := flag.Int("p", 0, "port to use")
+	// parse some flags to set our nickname and the room to join
+	nickFlag := flag.String("nick", "", "nickname to use in chat. will be generated if empty")
+	roomFlag := flag.String("room", "akumuji", "name of chat room to join")
+
 	flag.Parse()
 	ctx := context.Background()
 
@@ -40,66 +34,51 @@ func main() {
 		panic(err)
 	}
 
-	myStore := make(map[string]string)
-	myReStore := make(map[string]string)
-	foundPeer := make(chan peer.AddrInfo)
-
-	app := application{
-		store:   myStore,
-		restore: myReStore,
-		found:   foundPeer,
-	}
-
-	go app.discoverPeers(ctx, h)
-
+	// subscription is the 1st thing: done by the host
 	ps, err := pubsub.NewGossipSub(ctx, h)
 	if err != nil {
 		panic(err)
 	}
 
-	topic, err := ps.Join(*topicNameF)
+	// use the nickname from the cli flag, or a default if blank
+	nick := *nickFlag
+	if len(nick) == 0 {
+		nick = defaultNick(h.ID())
+	}
+
+	// join the room from the cli flag, or the flag default
+	room := *roomFlag
+
+	// join the chat room - takes care of topic <--> room
+	cr, err := JoinChatRoom(ctx, ps, h.ID(), nick, room)
 	if err != nil {
 		panic(err)
 	}
+
+	// use DHT
+	go cr.discoverPeers(ctx, h)
 
 	// groutine that sends out messages
-	go streamConsoleTo(ctx, topic)
-
-	sub, err := topic.Subscribe()
-	if err != nil {
-		panic(err)
-	}
-
-	// set the app.store
-	go func(app *application) {
-		for {
-			p := <-app.found
-			if app.store[p.ID.String()] != "" {
-				continue // dont kill our label
-			}
-			label := fmt.Sprintf("%d", len(app.store)+1)
-			app.store[p.ID.String()] = label
-			app.restore[label] = p.ID.String() // do we want a map into peers?
-		}
-	}(&app)
+	go cr.streamConsoleTo() // ctx, cr.topic)
 
 	// // we want to keep looking at attached hosts
-	go func() {
-		for {
-			time.Sleep(1 * time.Minute)
-			println("--------------------------")
-			log.Println("mystore:")
-			for p := range myStore {
-				println(p) // log.Printf("id: %s\n", p)
-			}
-			println("--------------------------")
-		}
-	}()
+	// go func() {
+	// 	for {
+	// 		time.Sleep(1 * time.Minute) // use a ticker inside a select
+	// 		println("--------------------------")
+	// 		// log.Println("mystore:")
+	// 		// for p := range myStore {
+	// 		// 	println(p) // log.Printf("id: %s\n", p)
+	// 		// }
+	// 		println("--------------------------")
+	// 	}
+	// }()
 
 	// loop that prints responses
-	app.printMessagesFrom(ctx, sub)
+	cr.printMessagesFrom() //ctx, cr.sub)
 }
 
+// called by discoverPeers
 func initDHT(ctx context.Context, h host.Host) *dht.IpfsDHT {
 	// Start a DHT, for use in peer discovery. We can't just make a new DHT
 	// client because we want each peer to maintain its own local copy of the
@@ -128,16 +107,18 @@ func initDHT(ctx context.Context, h host.Host) *dht.IpfsDHT {
 	return kademliaDHT
 }
 
-func (app *application) discoverPeers(ctx context.Context, h host.Host) {
+// use topic from the chatroot, could have also been set as a parameter
+func (cr *ChatRoom) discoverPeers(ctx context.Context, h host.Host) {
 	kademliaDHT := initDHT(ctx, h)
 	routingDiscovery := drouting.NewRoutingDiscovery(kademliaDHT)
-	dutil.Advertise(ctx, routingDiscovery, *topicNameF)
+	// dutil.Advertise(ctx, routingDiscovery, *topicNameF)
+	dutil.Advertise(ctx, routingDiscovery, cr.topic.String())
 
 	// Look for others who have announced and attempt to connect to them
 	anyConnected := false
 	for !anyConnected {
 		fmt.Println("Searching for peers...")
-		peerChan, err := routingDiscovery.FindPeers(ctx, *topicNameF)
+		peerChan, err := routingDiscovery.FindPeers(ctx, cr.topic.String()) // *topicNameF
 		if err != nil {
 			panic(err)
 		}
@@ -150,22 +131,21 @@ func (app *application) discoverPeers(ctx context.Context, h host.Host) {
 				fmt.Println("Failed connecting to ", peer.ID.String(), ", error:", err)
 			} else {
 				fmt.Println("Connected to:", peer.ID.String())
-				// app.store[peer.ID.String()] = true
-				app.found <- peer
 				anyConnected = true
 			}
 		}
 	}
 	fmt.Println("Peer discovery complete")
 
-	go app.fetchMore(ctx, routingDiscovery, h)
+	// continue looking ...
+	go cr.fetchMore(ctx, routingDiscovery, h)
 }
 
-// lonng term search for peers
-func (app *application) fetchMore(ctx context.Context, routingDiscovery *drouting.RoutingDiscovery, h host.Host) {
+// long term search for peers
+func (cr *ChatRoom) fetchMore(ctx context.Context, routingDiscovery *drouting.RoutingDiscovery, h host.Host) {
 	for {
 		//fmt.Println("Searching for peers...")
-		peerChan, err := routingDiscovery.FindPeers(ctx, *topicNameF)
+		peerChan, err := routingDiscovery.FindPeers(ctx, cr.topic.String()) // *topicNameF
 		if err != nil {
 			panic(err)
 		}
@@ -173,54 +153,63 @@ func (app *application) fetchMore(ctx context.Context, routingDiscovery *droutin
 			if peer.ID == h.ID() {
 				continue // No self connection
 			}
-			peerAD := peer.ID.String()
+			// peerAD := peer.ID.String()
 			// test connectivity
-			err := h.Connect(ctx, peer)
-			if err != nil {
-				if app.store[peerAD] != "" {
-					delete(app.store, peerAD) // clear departed
+			// err := h.Connect(ctx, peer)
+			h.Connect(ctx, peer) // test connected
+			/*
+				if err != nil {
+					if app.store[peerAD] != "" {
+						delete(app.store, peerAD) // clear departed
+					}
+				} else {
+					// silently add new found
+					app.found <- peer
 				}
-			} else {
-				// silently add new found
-				app.found <- peer
-			}
+			*/
 		}
 	}
 }
 
-func streamConsoleTo(ctx context.Context, topic *pubsub.Topic) {
+func (cr *ChatRoom) streamConsoleTo() { //ctx context.Context, topic *pubsub.Topic) {
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		s, err := reader.ReadString('\n')
 		if err != nil {
 			panic(err)
 		}
-		if err := topic.Publish(ctx, []byte(s)); err != nil {
+		if err := cr.Publish(s); err != nil {
 			fmt.Println("### Publish error:", err)
 		}
 	}
 }
 
-func (app *application) printMessagesFrom(ctx context.Context, sub *pubsub.Subscription) {
+func (cr *ChatRoom) printMessagesFrom() { //ctx context.Context, sub *pubsub.Subscription) {
 	for {
-		m, err := sub.Next(ctx)
+		m, err := cr.sub.Next(cr.ctx)
 		if err != nil {
 			panic(err)
 		}
-		line := string(m.Message.Data)
-		if strings.HasPrefix(line, "/") {
-			go app.handleCmnds(m.ReceivedFrom.String(), line) //println("got a command: ", line)
+		// line := string(m.Message.Data)
+
+		cm := new(ChatMessage)
+		err = json.Unmarshal(m.Message.Data, cm)
+		if err != nil {
 			continue
 		}
-		from := app.store[m.ReceivedFrom.String()]
-		if from == "" {
-			from = "me"
+		if strings.HasPrefix(cm.Message, "/") {
+			go handleCmnds(cr.nick, cm.Message) //println("got a command: ", line)
+			continue
 		}
-		fmt.Println(from, ": ", line)
+		// from := app.store[m.ReceivedFrom.String()]
+		// if from == "" {
+		// 	from = "me"
+		// }
+		fmt.Println(cr.nick, ": ", cm.Message) // use nick
 	}
 }
 
-func (app *application) handleCmnds(from, cmd string) {
+func handleCmnds(from, cmd string) {
 	arr := strings.Split(cmd, " ")
 	switch arr[0] {
 	case "/name":
@@ -228,4 +217,16 @@ func (app *application) handleCmnds(from, cmd string) {
 	default:
 		// log. an error
 	}
+}
+
+// defaultNick generates a nickname based on the $USER environment variable and
+// the last 8 chars of a peer ID.
+func defaultNick(p peer.ID) string {
+	return fmt.Sprintf("%s-%s", os.Getenv("USER"), shortID(p))
+}
+
+// shortID returns the last 8 chars of a base58-encoded peer id.
+func shortID(p peer.ID) string {
+	pretty := p.Pretty()
+	return pretty[len(pretty)-8:]
 }
