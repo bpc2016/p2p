@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/libp2p/go-libp2p/core/peer"
 
@@ -18,6 +19,8 @@ const ChatRoomBufSize = 128
 type ChatRoom struct {
 	// Messages is a channel of messages received from other peers in the chat room
 	Messages chan *ChatMessage
+	// Commands is a channel for commands issued
+	Commands chan *ChatCommand
 
 	ctx   context.Context
 	ps    *pubsub.PubSub
@@ -34,6 +37,36 @@ type ChatMessage struct {
 	Message    string
 	SenderID   string
 	SenderNick string
+}
+
+type ChatCommand struct {
+	Cmd        string
+	SenderID   string
+	SenderNick string
+	Params     []string
+}
+
+// call this on a chatroom object in main()
+func (cr *ChatRoom) JoinChat(roomName string) error {
+	// join the pubsub topic
+	topic, err := cr.ps.Join(topicName(roomName))
+	if err != nil {
+		return err
+	}
+
+	// and subscribe to it
+	sub, err := topic.Subscribe()
+	if err != nil {
+		return err
+	}
+
+	cr.topic = topic
+	cr.sub = sub
+	cr.roomName = roomName
+
+	// start reading messages from the subscription in a loop
+	go cr.readLoop()
+	return nil
 }
 
 // JoinChatRoom tries to subscribe to the PubSub topic for the room name, returning
@@ -63,7 +96,7 @@ func JoinChatRoom(ctx context.Context, ps *pubsub.PubSub, selfID peer.ID, nickna
 	}
 
 	// start reading messages from the subscription in a loop
-	// go cr.readLoop()
+	go cr.readLoop()
 	return cr, nil
 }
 
@@ -85,7 +118,6 @@ func (cr *ChatRoom) ListPeers() []peer.ID {
 	return cr.ps.ListPeers(topicName(cr.roomName))
 }
 
-/*
 // readLoop pulls messages from the pubsub topic and pushes them onto the Messages channel.
 func (cr *ChatRoom) readLoop() {
 	for {
@@ -96,6 +128,7 @@ func (cr *ChatRoom) readLoop() {
 		}
 		// only forward messages delivered by others
 		if msg.ReceivedFrom == cr.self {
+			println()
 			continue
 		}
 		cm := new(ChatMessage)
@@ -103,12 +136,34 @@ func (cr *ChatRoom) readLoop() {
 		if err != nil {
 			continue
 		}
+		// is this a command?
+		if strings.HasPrefix(cm.Message, "/") {
+			cc, err := parseCommand(cm)
+			if err != nil {
+				continue
+			}
+			// send valid comand
+			cr.Commands <- cc
+		}
 		// send valid messages onto the Messages channel
 		cr.Messages <- cm
 	}
 }
-*/
 
 func topicName(roomName string) string {
 	return "chat-room:" + roomName
+}
+
+func parseCommand(cm *ChatMessage) (*ChatCommand, error) {
+	cc := new(ChatCommand)
+	cc.SenderID = cm.SenderID
+	cc.SenderNick = cm.SenderNick
+	arr := strings.Split(cm.Message, " ")
+	cc.Cmd = arr[0]
+	// check if the command exist, right length : return error else
+	if len(arr) == 1 {
+		return cc, nil
+	}
+	cc.Params = arr[1:]
+	return cc, nil
 }
