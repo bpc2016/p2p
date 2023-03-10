@@ -184,12 +184,28 @@ func (cr *ChatRoom) streamConsoleTo() { //ctx context.Context, topic *pubsub.Top
 	}
 }
 
+// func (cr *ChatRoom) printMessagesFrom2() {
+// 	for {
+// 		select {
+// 		case cm := <-cr.Messages:
+// 			fmt.Println(cm.SenderNick, ": ", cm.Message)
+// 		}
+// 	}
+// }
+
 func (cr *ChatRoom) printMessagesFrom() { //ctx context.Context, sub *pubsub.Subscription) {
 	for {
 		m, err := cr.sub.Next(cr.ctx)
 		if err != nil {
 			panic(err)
 		}
+
+		// only forward messages delivered by others
+		if m.ReceivedFrom == cr.self {
+			println()
+			continue
+		}
+
 		// line := string(m.Message.Data)
 
 		cm := new(ChatMessage)
@@ -205,7 +221,7 @@ func (cr *ChatRoom) printMessagesFrom() { //ctx context.Context, sub *pubsub.Sub
 		// if from == "" {
 		// 	from = "me"
 		// }
-		fmt.Println(cr.nick, ": ", cm.Message) // use nick
+		fmt.Println(cm.SenderNick, ": ", cm.Message) // use nick
 	}
 }
 
