@@ -19,7 +19,7 @@ const ChatRoomBufSize = 128
 type ChatRoom struct {
 	// Messages is a channel of messages received from other peers in the chat room
 	Messages chan *ChatMessage
-	// Commands is a channel for commands issued
+	// Commands is a channel for commands issued these are produced from messages - see commands.go
 	Commands chan *ChatCommand
 
 	ctx   context.Context
@@ -69,37 +69,6 @@ func (cr *ChatRoom) JoinChat(roomName string) error {
 	return nil
 }
 
-// JoinChatRoom tries to subscribe to the PubSub topic for the room name, returning
-// a ChatRoom on success.
-func JoinChatRoom(ctx context.Context, ps *pubsub.PubSub, selfID peer.ID, nickname string, roomName string) (*ChatRoom, error) {
-	// join the pubsub topic
-	topic, err := ps.Join(topicName(roomName))
-	if err != nil {
-		return nil, err
-	}
-
-	// and subscribe to it
-	sub, err := topic.Subscribe()
-	if err != nil {
-		return nil, err
-	}
-
-	cr := &ChatRoom{
-		ctx:      ctx,
-		ps:       ps,
-		topic:    topic,
-		sub:      sub,
-		self:     selfID,
-		nick:     nickname,
-		roomName: roomName,
-		Messages: make(chan *ChatMessage, ChatRoomBufSize),
-	}
-
-	// start reading messages from the subscription in a loop
-	go cr.readLoop()
-	return cr, nil
-}
-
 // Publish sends a message to the pubsub topic.
 func (cr *ChatRoom) Publish(message string) error {
 	m := ChatMessage{
@@ -138,12 +107,13 @@ func (cr *ChatRoom) readLoop() {
 		}
 		// is this a command?
 		if strings.HasPrefix(cm.Message, "/") {
-			cc, err := parseCommand(cm)
-			if err != nil {
+			cc := new(ChatCommand)
+			if err := cc.ParseCommand(cm); err != nil {
 				continue
 			}
 			// send valid comand
 			cr.Commands <- cc
+			continue
 		}
 		// send valid messages onto the Messages channel
 		cr.Messages <- cm
@@ -154,16 +124,49 @@ func topicName(roomName string) string {
 	return "chat-room:" + roomName
 }
 
-func parseCommand(cm *ChatMessage) (*ChatCommand, error) {
-	cc := new(ChatCommand)
+// move to commands.go
+func (cc *ChatCommand) ParseCommand(cm *ChatMessage) error {
 	cc.SenderID = cm.SenderID
 	cc.SenderNick = cm.SenderNick
-	arr := strings.Split(cm.Message, " ")
+	str := strings.TrimSuffix(cm.Message, "\n")
+	arr := strings.Split(string(str), " ")
 	cc.Cmd = arr[0]
 	// check if the command exist, right length : return error else
 	if len(arr) == 1 {
-		return cc, nil
+		return nil
 	}
 	cc.Params = arr[1:]
-	return cc, nil
+	return nil
+}
+
+// ------------------ old ---------------------
+// JoinChatRoom tries to subscribe to the PubSub topic for the room name, returning
+// a ChatRoom on success.
+func JoinChatRoom(ctx context.Context, ps *pubsub.PubSub, selfID peer.ID, nickname string, roomName string) (*ChatRoom, error) {
+	// join the pubsub topic
+	topic, err := ps.Join(topicName(roomName))
+	if err != nil {
+		return nil, err
+	}
+
+	// and subscribe to it
+	sub, err := topic.Subscribe()
+	if err != nil {
+		return nil, err
+	}
+
+	cr := &ChatRoom{
+		ctx:      ctx,
+		ps:       ps,
+		topic:    topic,
+		sub:      sub,
+		self:     selfID,
+		nick:     nickname,
+		roomName: roomName,
+		Messages: make(chan *ChatMessage, ChatRoomBufSize),
+	}
+
+	// start reading messages from the subscription in a loop
+	go cr.readLoop()
+	return cr, nil
 }

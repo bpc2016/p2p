@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -52,6 +51,7 @@ func main() {
 	// a new one, so that we can easily move to another
 	cr := ChatRoom{
 		Messages: make(chan *ChatMessage, ChatRoomBufSize),
+		Commands: make(chan *ChatCommand, ChatRoomBufSize),
 		ctx:      ctx,
 		ps:       ps,
 		self:     h.ID(),
@@ -228,13 +228,14 @@ func (cr *ChatRoom) printMessagesFrom() {
 		case cm := <-cr.Messages:
 			fmt.Println(cm.SenderNick, ": ", cm.Message)
 		case cc := <-cr.Commands:
-			fmt.Println(cc.SenderNick, ": ", cc.Cmd, cc.Params)
+			fmt.Println(cc.SenderNick, ">> ", cc.Cmd, cc.Params)
 		case <-ticker.C:
 			// do nothing yet
 		}
 	}
 }
 
+/*
 // for local commands like listing peers etc
 func handleCmnds(from, cmd string) {
 	arr := strings.Split(cmd, " ")
@@ -245,6 +246,7 @@ func handleCmnds(from, cmd string) {
 		// log. an error
 	}
 }
+*/
 
 // defaultNick generates a nickname based on the $USER environment variable and
 // the last 8 chars of a peer ID.
