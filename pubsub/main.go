@@ -3,12 +3,12 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -49,30 +49,30 @@ func main() {
 	// join the room from the cli flag, or the flag default
 	room := *roomFlag
 
-	// join the chat room - takes care of topic <--> room
-	cr, err := JoinChatRoom(ctx, ps, h.ID(), nick, room)
-	if err != nil {
+	// a new one, so that we can easily move to another
+	cr := ChatRoom{
+		Messages: make(chan *ChatMessage, ChatRoomBufSize),
+		ctx:      ctx,
+		ps:       ps,
+		self:     h.ID(),
+		nick:     nick,
+	}
+
+	if err := cr.JoinChat(room); err != nil {
 		panic(err)
 	}
+
+	// join the chat room - takes care of topic <--> room
+	// cr, err := JoinChatRoom(ctx, ps, h.ID(), nick, room)
+	// if err != nil {
+	// 	panic(err)
+	// }
 
 	// use DHT
 	go cr.discoverPeers(ctx, h)
 
 	// groutine that sends out messages
 	go cr.streamConsoleTo() // ctx, cr.topic)
-
-	// // we want to keep looking at attached hosts
-	// go func() {
-	// 	for {
-	// 		time.Sleep(1 * time.Minute) // use a ticker inside a select
-	// 		println("--------------------------")
-	// 		// log.Println("mystore:")
-	// 		// for p := range myStore {
-	// 		// 	println(p) // log.Printf("id: %s\n", p)
-	// 		// }
-	// 		println("--------------------------")
-	// 	}
-	// }()
 
 	// loop that prints responses
 	cr.printMessagesFrom() //ctx, cr.sub)
@@ -171,6 +171,7 @@ func (cr *ChatRoom) fetchMore(ctx context.Context, routingDiscovery *drouting.Ro
 	}
 }
 
+// ctx and topic taken care of by chatroom
 func (cr *ChatRoom) streamConsoleTo() { //ctx context.Context, topic *pubsub.Topic) {
 	reader := bufio.NewReader(os.Stdin)
 	for {
@@ -184,15 +185,8 @@ func (cr *ChatRoom) streamConsoleTo() { //ctx context.Context, topic *pubsub.Top
 	}
 }
 
-// func (cr *ChatRoom) printMessagesFrom2() {
-// 	for {
-// 		select {
-// 		case cm := <-cr.Messages:
-// 			fmt.Println(cm.SenderNick, ": ", cm.Message)
-// 		}
-// 	}
-// }
-
+/*
+// handle incoming messages
 func (cr *ChatRoom) printMessagesFrom() { //ctx context.Context, sub *pubsub.Subscription) {
 	for {
 		m, err := cr.sub.Next(cr.ctx)
@@ -224,7 +218,24 @@ func (cr *ChatRoom) printMessagesFrom() { //ctx context.Context, sub *pubsub.Sub
 		fmt.Println(cm.SenderNick, ": ", cm.Message) // use nick
 	}
 }
+*/
 
+// for multiplexed chat usage - use with readloop
+func (cr *ChatRoom) printMessagesFrom() {
+	ticker := time.NewTicker(1 * time.Minute)
+	for {
+		select {
+		case cm := <-cr.Messages:
+			fmt.Println(cm.SenderNick, ": ", cm.Message)
+		case cc := <-cr.Commands:
+			fmt.Println(cc.SenderNick, ": ", cc.Cmd, cc.Params)
+		case <-ticker.C:
+			// do nothing yet
+		}
+	}
+}
+
+// for local commands like listing peers etc
 func handleCmnds(from, cmd string) {
 	arr := strings.Split(cmd, " ")
 	switch arr[0] {
