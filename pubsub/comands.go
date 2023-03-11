@@ -64,7 +64,7 @@ func (cc *ChatCommand) Find(rest string) error {
 	return nil
 }
 
-// local commands
+// local commands all prefixed with '.'
 func find(cmd string, prs *[]string, rest string) error {
 	switch cmd {
 	case ".join":
