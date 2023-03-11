@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -39,15 +40,8 @@ type ChatMessage struct {
 	SenderNick string
 }
 
-type ChatCommand struct {
-	Cmd        string
-	SenderID   string
-	SenderNick string
-	Params     []string
-}
-
 // call this on a chatroom object in main()
-func (cr *ChatRoom) JoinChat(roomName string) error {
+func (cr *ChatRoom) JoinChat(h host.Host, roomName string) error {
 	// join the pubsub topic
 	topic, err := cr.ps.Join(topicName(roomName))
 	if err != nil {
@@ -60,12 +54,22 @@ func (cr *ChatRoom) JoinChat(roomName string) error {
 		return err
 	}
 
+	// fmt.Printf("--- I am %s and joining topic %s\n", cr.nick, topic.String())
+
 	cr.topic = topic
 	cr.sub = sub
 	cr.roomName = roomName
+	cr.Messages = make(chan *ChatMessage, ChatRoomBufSize)
+	cr.Commands = make(chan *ChatCommand, ChatRoomBufSize)
+
+	// use DHT
+	go cr.discoverPeers(cr.ctx, h)
+
+	// write message
+	go cr.streamConsoleTo()
 
 	// start reading messages from the subscription in a loop
-	go cr.readLoop()
+	go cr.readLoop(h)
 	return nil
 }
 
@@ -88,7 +92,7 @@ func (cr *ChatRoom) ListPeers() []peer.ID {
 }
 
 // readLoop pulls messages from the pubsub topic and pushes them onto the Messages channel.
-func (cr *ChatRoom) readLoop() {
+func (cr *ChatRoom) readLoop(h host.Host) {
 	for {
 		msg, err := cr.sub.Next(cr.ctx)
 		if err != nil {
@@ -98,6 +102,7 @@ func (cr *ChatRoom) readLoop() {
 		// only forward messages delivered by others
 		if msg.ReceivedFrom == cr.self {
 			println()
+			cr.HandleLocal(msg, h)
 			continue
 		}
 		cm := new(ChatMessage)
@@ -105,7 +110,11 @@ func (cr *ChatRoom) readLoop() {
 		if err != nil {
 			continue
 		}
-		// is this a command?
+		// is this a local command?
+		if strings.HasPrefix(cm.Message, ".") {
+			continue
+		}
+		// is this a remote command?
 		if strings.HasPrefix(cm.Message, "/") {
 			cc := new(ChatCommand)
 			if err := cc.ParseCommand(cm); err != nil {
@@ -122,21 +131,6 @@ func (cr *ChatRoom) readLoop() {
 
 func topicName(roomName string) string {
 	return "chat-room:" + roomName
-}
-
-// move to commands.go
-func (cc *ChatCommand) ParseCommand(cm *ChatMessage) error {
-	cc.SenderID = cm.SenderID
-	cc.SenderNick = cm.SenderNick
-	str := strings.TrimSuffix(cm.Message, "\n")
-	arr := strings.Split(string(str), " ")
-	cc.Cmd = arr[0]
-	// check if the command exist, right length : return error else
-	if len(arr) == 1 {
-		return nil
-	}
-	cc.Params = arr[1:]
-	return nil
 }
 
 // ------------------ old ---------------------
@@ -167,6 +161,6 @@ func JoinChatRoom(ctx context.Context, ps *pubsub.PubSub, selfID peer.ID, nickna
 	}
 
 	// start reading messages from the subscription in a loop
-	go cr.readLoop()
+	// go cr.readLoop()
 	return cr, nil
 }

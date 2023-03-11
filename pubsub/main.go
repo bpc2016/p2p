@@ -45,37 +45,28 @@ func main() {
 		nick = defaultNick(h.ID())
 	}
 
-	// join the room from the cli flag, or the flag default
-	room := *roomFlag
-
 	// a new one, so that we can easily move to another
 	cr := ChatRoom{
-		Messages: make(chan *ChatMessage, ChatRoomBufSize),
-		Commands: make(chan *ChatCommand, ChatRoomBufSize),
-		ctx:      ctx,
-		ps:       ps,
-		self:     h.ID(),
-		nick:     nick,
+		ctx:  ctx,
+		ps:   ps,
+		self: h.ID(),
+		nick: nick,
 	}
 
-	if err := cr.JoinChat(room); err != nil {
+	// joining room = *roomFlag takes care of topic,
+	// now includes discovery, hence the h
+	if err := cr.JoinChat(h, *roomFlag); err != nil {
 		panic(err)
 	}
 
-	// join the chat room - takes care of topic <--> room
-	// cr, err := JoinChatRoom(ctx, ps, h.ID(), nick, room)
-	// if err != nil {
-	// 	panic(err)
-	// }
-
 	// use DHT
-	go cr.discoverPeers(ctx, h)
+	// go cr.discoverPeers(ctx, h)
 
 	// groutine that sends out messages
-	go cr.streamConsoleTo() // ctx, cr.topic)
+	// go cr.streamConsoleTo() // ctx, cr.topic)
 
 	// loop that prints responses
-	cr.printMessagesFrom() //ctx, cr.sub)
+	cr.printMessagesFrom(h) // h so that we can use JoinChat
 }
 
 // called by discoverPeers
@@ -111,14 +102,14 @@ func initDHT(ctx context.Context, h host.Host) *dht.IpfsDHT {
 func (cr *ChatRoom) discoverPeers(ctx context.Context, h host.Host) {
 	kademliaDHT := initDHT(ctx, h)
 	routingDiscovery := drouting.NewRoutingDiscovery(kademliaDHT)
-	// dutil.Advertise(ctx, routingDiscovery, *topicNameF)
-	dutil.Advertise(ctx, routingDiscovery, cr.topic.String())
+	topicname := cr.topic.String()
+	dutil.Advertise(ctx, routingDiscovery, topicname)
 
 	// Look for others who have announced and attempt to connect to them
 	anyConnected := false
 	for !anyConnected {
 		fmt.Println("Searching for peers...")
-		peerChan, err := routingDiscovery.FindPeers(ctx, cr.topic.String()) // *topicNameF
+		peerChan, err := routingDiscovery.FindPeers(ctx, topicname)
 		if err != nil {
 			panic(err)
 		}
@@ -136,20 +127,86 @@ func (cr *ChatRoom) discoverPeers(ctx context.Context, h host.Host) {
 		}
 	}
 	fmt.Println("Peer discovery complete")
-
-	// continue looking ...
-	go cr.fetchMore(ctx, routingDiscovery, h)
 }
 
+// capture keystrokes and produce messages
+// ctx and topic taken care of by chatroom
+func (cr *ChatRoom) streamConsoleTo() {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		s, err := reader.ReadString('\n')
+		if err != nil {
+			panic(err)
+		}
+		if err := cr.Publish(s); err != nil {
+			fmt.Println("### Publish error:", err)
+		}
+	}
+}
+
+// for multiplexed chat usage - use with readloop
+func (cr *ChatRoom) printMessagesFrom(h host.Host) {
+	ticker := time.NewTicker(5 * time.Second)
+	for {
+		select {
+		case cm := <-cr.Messages:
+			fmt.Println(cm.SenderNick, ": ", cm.Message)
+		case cc := <-cr.Commands:
+			// fmt.Println(cc.SenderNick, ">> ", cc.Cmd, cc.Params)
+			if err := cr.RPCs(cc, h); err != nil {
+				fmt.Printf("handle command error: %v\n", err)
+				continue
+			}
+		case <-ticker.C:
+			// do nothing
+		}
+	}
+}
+
+func (cr *ChatRoom) RPCs(cc *ChatCommand, h host.Host) error {
+	// typical example: shift room
+	switch cc.Cmd {
+	case "/join":
+		room := cc.Params[0] // already know this is nonempty
+		if err := cr.JoinChat(h, room); err != nil {
+			panic(err)
+		}
+	}
+	return nil
+}
+
+// defaultNick generates a nickname based on the $USER environment variable and
+// the last 8 chars of a peer ID.
+func defaultNick(p peer.ID) string {
+	return fmt.Sprintf("%s-%s", os.Getenv("USER"), shortID(p))
+}
+
+// shortID returns the last 8 chars of a base58-encoded peer id.
+func shortID(p peer.ID) string {
+	pretty := p.Pretty()
+	return pretty[len(pretty)-8:]
+}
+
+// -----------------  old --------------------
+
 // long term search for peers
-func (cr *ChatRoom) fetchMore(ctx context.Context, routingDiscovery *drouting.RoutingDiscovery, h host.Host) {
+func (cr *ChatRoom) FetchMore(ctx context.Context, routingDiscovery *drouting.RoutingDiscovery, h host.Host, abort chan struct{}) {
+out:
 	for {
 		//fmt.Println("Searching for peers...")
+		// time.Sleep(2*time.Second)
+		select {
+		case <-time.After(2 * time.Second):
+			// wait, do nothing then continue
+		case <-abort:
+			break out // of the loop
+		}
 		peerChan, err := routingDiscovery.FindPeers(ctx, cr.topic.String()) // *topicNameF
 		if err != nil {
 			panic(err)
 		}
 		for peer := range peerChan {
+			print(".")
 			if peer.ID == h.ID() {
 				continue // No self connection
 			}
@@ -168,70 +225,7 @@ func (cr *ChatRoom) fetchMore(ctx context.Context, routingDiscovery *drouting.Ro
 				}
 			*/
 		}
-	}
-}
-
-// ctx and topic taken care of by chatroom
-func (cr *ChatRoom) streamConsoleTo() { //ctx context.Context, topic *pubsub.Topic) {
-	reader := bufio.NewReader(os.Stdin)
-	for {
-		s, err := reader.ReadString('\n')
-		if err != nil {
-			panic(err)
-		}
-		if err := cr.Publish(s); err != nil {
-			fmt.Println("### Publish error:", err)
-		}
-	}
-}
-
-/*
-// handle incoming messages
-func (cr *ChatRoom) printMessagesFrom() { //ctx context.Context, sub *pubsub.Subscription) {
-	for {
-		m, err := cr.sub.Next(cr.ctx)
-		if err != nil {
-			panic(err)
-		}
-
-		// only forward messages delivered by others
-		if m.ReceivedFrom == cr.self {
-			println()
-			continue
-		}
-
-		// line := string(m.Message.Data)
-
-		cm := new(ChatMessage)
-		err = json.Unmarshal(m.Message.Data, cm)
-		if err != nil {
-			continue
-		}
-		if strings.HasPrefix(cm.Message, "/") {
-			go handleCmnds(cr.nick, cm.Message) //println("got a command: ", line)
-			continue
-		}
-		// from := app.store[m.ReceivedFrom.String()]
-		// if from == "" {
-		// 	from = "me"
-		// }
-		fmt.Println(cm.SenderNick, ": ", cm.Message) // use nick
-	}
-}
-*/
-
-// for multiplexed chat usage - use with readloop
-func (cr *ChatRoom) printMessagesFrom() {
-	ticker := time.NewTicker(1 * time.Minute)
-	for {
-		select {
-		case cm := <-cr.Messages:
-			fmt.Println(cm.SenderNick, ": ", cm.Message)
-		case cc := <-cr.Commands:
-			fmt.Println(cc.SenderNick, ">> ", cc.Cmd, cc.Params)
-		case <-ticker.C:
-			// do nothing yet
-		}
+		println()
 	}
 }
 
@@ -247,15 +241,3 @@ func handleCmnds(from, cmd string) {
 	}
 }
 */
-
-// defaultNick generates a nickname based on the $USER environment variable and
-// the last 8 chars of a peer ID.
-func defaultNick(p peer.ID) string {
-	return fmt.Sprintf("%s-%s", os.Getenv("USER"), shortID(p))
-}
-
-// shortID returns the last 8 chars of a base58-encoded peer id.
-func shortID(p peer.ID) string {
-	pretty := p.Pretty()
-	return pretty[len(pretty)-8:]
-}
