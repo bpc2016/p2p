@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,14 +20,21 @@ import (
 	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
 )
 
+type application struct {
+	debug bool
+}
+
+var my application
+
 func main() {
+	debugF := flag.Bool("d", false, "debug")
 	portF := flag.Int("p", 0, "port to use")
-	// parse some flags to set our nickname and the room to join
-	nickFlag := flag.String("nick", "", "nickname to use in chat. will be generated if empty")
-	roomFlag := flag.String("room", "akumuji", "name of chat room to join")
+	nickF := flag.String("nick", "", "nickname to use in chat. will be generated if empty")
+	roomF := flag.String("room", "akumuji", "name of chat room to join")
 
 	flag.Parse()
 	ctx := context.Background()
+	my.debug = *debugF
 
 	listener := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", *portF)
 	h, err := libp2p.New(libp2p.ListenAddrStrings(listener))
@@ -40,33 +49,39 @@ func main() {
 	}
 
 	// use the nickname from the cli flag, or a default if blank
-	nick := *nickFlag
+	nick := *nickF
 	if len(nick) == 0 {
 		nick = defaultNick(h.ID())
 	}
 
-	// a new one, so that we can easily move to another
+	// cr defined here so that we can easily move to another
 	cr := ChatRoom{
 		ctx:  ctx,
 		ps:   ps,
 		self: h.ID(),
 		nick: nick,
+		home: *roomF,
+		quit: make(chan struct{}),
 	}
 
-	// joining room = *roomFlag takes care of topic,
+	// joining room = *roomF takes care of topic,
 	// now includes discovery, hence the h
-	if err := cr.JoinChat(h, *roomFlag); err != nil {
+	if err := cr.JoinChat(h, *roomF); err != nil {
 		panic(err)
 	}
 
-	// use DHT
-	// go cr.discoverPeers(ctx, h)
+	cr.homeTopic = cr.topic // keep this one, for use by the `.home` command
 
-	// groutine that sends out messages
-	// go cr.streamConsoleTo() // ctx, cr.topic)
-
-	// loop that prints responses
+	// loop that prints responses, user sends message `.bye` to quit
 	cr.printMessagesFrom(h) // h so that we can use JoinChat
+}
+
+// my own println - replace a verbiage with x
+func (my *application) Println(x string, a ...any) (n int, err error) {
+	if my.debug {
+		return fmt.Println(a...)
+	}
+	return fmt.Print(x) // just replace with these
 }
 
 // called by discoverPeers
@@ -108,7 +123,7 @@ func (cr *ChatRoom) discoverPeers(ctx context.Context, h host.Host) {
 	// Look for others who have announced and attempt to connect to them
 	anyConnected := false
 	for !anyConnected {
-		fmt.Println("Searching for peers...")
+		my.Println("\n", "Searching for peers...")
 		peerChan, err := routingDiscovery.FindPeers(ctx, topicname)
 		if err != nil {
 			panic(err)
@@ -119,14 +134,14 @@ func (cr *ChatRoom) discoverPeers(ctx context.Context, h host.Host) {
 			}
 			err := h.Connect(ctx, peer)
 			if err != nil {
-				fmt.Println("Failed connecting to ", peer.ID.String(), ", error:", err)
+				my.Println("-", "Failed connecting to ", peer.ID.String(), ", error:", err)
 			} else {
-				fmt.Println("Connected to:", peer.ID.String())
+				my.Println("\n@\n", "Connected to:", peer.ID.String())
 				anyConnected = true
 			}
 		}
 	}
-	fmt.Println("Peer discovery complete")
+	my.Println("\nPeer discovery complete\n\n", "Peer discovery complete")
 }
 
 // capture keystrokes and produce messages
@@ -144,26 +159,37 @@ func (cr *ChatRoom) streamConsoleTo() {
 	}
 }
 
+func printLine(from, msg string) (n int, err error) {
+	// Green console colour: 	\x1b[32m
+	// Reset console colour: 	\x1b[0m
+	return fmt.Printf("\x1b[32m%s\x1b[0m: %s\n\n", from, msg)
+}
+
 // for multiplexed chat usage - use with readloop
 func (cr *ChatRoom) printMessagesFrom(h host.Host) {
 	ticker := time.NewTicker(5 * time.Second)
+OUT:
 	for {
 		select {
 		case cm := <-cr.Messages:
-			fmt.Println(cm.SenderNick, ": ", cm.Message)
+			// fmt.Println(cm.SenderNick, ": ", cm.Message)
+			printLine(cm.SenderNick, cm.Message)
 		case cc := <-cr.Commands:
 			// fmt.Println(cc.SenderNick, ">> ", cc.Cmd, cc.Params)
-			if err := cr.RPCs(cc, h); err != nil {
+			if err := cr.HandleRemote(cc, h); err != nil {
 				fmt.Printf("handle command error: %v\n", err)
 				continue
 			}
 		case <-ticker.C:
 			// do nothing
+		case <-cr.quit:
+			break OUT
 		}
 	}
 }
 
-func (cr *ChatRoom) RPCs(cc *ChatCommand, h host.Host) error {
+// remote function calls
+func (cr *ChatRoom) HandleRemote(cc *ChatCommand, h host.Host) error {
 	// typical example: shift room
 	switch cc.Cmd {
 	case "/join":
@@ -171,8 +197,60 @@ func (cr *ChatRoom) RPCs(cc *ChatCommand, h host.Host) error {
 		if err := cr.JoinChat(h, room); err != nil {
 			panic(err)
 		}
+		return nil
+	case "/peers":
+		ids := cr.ListPeers()
+		for _, p := range ids {
+			fmt.Printf("%v\n", p)
+		}
+		return nil
+	case "/to":
+		if !strings.Contains(cc.Params[0], cr.nick) {
+			return nil // ignore message
+		}
+		// fmt.Println(cc.SenderNick, ": ", cc.Params[1])
+		printLine(cc.SenderNick, cc.Params[1])
+		return nil
+	default:
+		return errNotFound
 	}
-	return nil
+}
+
+// local commands look like `.join another_topic`
+func (cr *ChatRoom) HandleLocal(msg *pubsub.Message, h host.Host) {
+	cm := new(ChatMessage)
+	err := json.Unmarshal(msg.Data, cm)
+	if err != nil {
+		return
+	}
+	// really only want this for commands like `.join others``
+	if !strings.HasPrefix(cm.Message, ".") {
+		return
+	}
+	// verify this command exits, right syntax
+	cmd, prs := "", []string{}
+	if err := cr.ParseLocalCommand(&cmd, &prs, cm); err != nil {
+		return
+	}
+
+	switch cmd {
+	case ".join":
+		room := prs[0] // already know this is nonempty
+		if err := cr.JoinChat(h, room); err != nil {
+			panic(err)
+		}
+	case ".home": // return to base
+		if err := cr.Publish(fmt.Sprintf(".join %s", cr.home)); err != nil {
+			return
+		}
+	case ".peers": // list peers
+		ids := cr.ListPeers()
+		for _, p := range ids {
+			fmt.Printf("%v\n", p)
+		}
+	case ".bye": // exit program
+		cr.quit <- struct{}{}
+	}
 }
 
 // defaultNick generates a nickname based on the $USER environment variable and
@@ -186,58 +264,3 @@ func shortID(p peer.ID) string {
 	pretty := p.Pretty()
 	return pretty[len(pretty)-8:]
 }
-
-// -----------------  old --------------------
-
-// long term search for peers
-func (cr *ChatRoom) FetchMore(ctx context.Context, routingDiscovery *drouting.RoutingDiscovery, h host.Host, abort chan struct{}) {
-out:
-	for {
-		//fmt.Println("Searching for peers...")
-		// time.Sleep(2*time.Second)
-		select {
-		case <-time.After(2 * time.Second):
-			// wait, do nothing then continue
-		case <-abort:
-			break out // of the loop
-		}
-		peerChan, err := routingDiscovery.FindPeers(ctx, cr.topic.String()) // *topicNameF
-		if err != nil {
-			panic(err)
-		}
-		for peer := range peerChan {
-			print(".")
-			if peer.ID == h.ID() {
-				continue // No self connection
-			}
-			// peerAD := peer.ID.String()
-			// test connectivity
-			// err := h.Connect(ctx, peer)
-			h.Connect(ctx, peer) // test connected
-			/*
-				if err != nil {
-					if app.store[peerAD] != "" {
-						delete(app.store, peerAD) // clear departed
-					}
-				} else {
-					// silently add new found
-					app.found <- peer
-				}
-			*/
-		}
-		println()
-	}
-}
-
-/*
-// for local commands like listing peers etc
-func handleCmnds(from, cmd string) {
-	arr := strings.Split(cmd, " ")
-	switch arr[0] {
-	case "/name":
-		println(from, " : ", arr[1])
-	default:
-		// log. an error
-	}
-}
-*/
