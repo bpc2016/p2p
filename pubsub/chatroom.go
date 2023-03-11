@@ -28,9 +28,12 @@ type ChatRoom struct {
 	topic *pubsub.Topic
 	sub   *pubsub.Subscription
 
-	roomName string
-	self     peer.ID
-	nick     string
+	roomName  string
+	self      peer.ID
+	nick      string
+	home      string
+	homeTopic *pubsub.Topic
+	quit      chan struct{}
 }
 
 // ChatMessage gets converted to/from JSON and sent in the body of pubsub messages.
@@ -42,10 +45,19 @@ type ChatMessage struct {
 
 // call this on a chatroom object in main()
 func (cr *ChatRoom) JoinChat(h host.Host, roomName string) error {
-	// join the pubsub topic
-	topic, err := cr.ps.Join(topicName(roomName))
-	if err != nil {
-		return err
+	var (
+		topic *pubsub.Topic
+		err   error
+	)
+	if cr.homeTopic != nil && roomName == cr.home {
+		// we are returning home ...
+		topic = cr.homeTopic
+	} else {
+		// join the pubsub topic
+		topic, err = cr.ps.Join(topicName(roomName))
+		if err != nil {
+			return err
+		}
 	}
 
 	// and subscribe to it
