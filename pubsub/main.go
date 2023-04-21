@@ -198,6 +198,7 @@ OUT:
 	for {
 		select {
 		case cm := <-cr.Messages:
+			// gather nick --> peerid mappinng
 			// fmt.Println(cm.SenderNick, ": ", cm.Message)
 			printLine(cm.SenderNick, cm.Message)
 		case cc := <-cr.Commands:
@@ -236,6 +237,14 @@ func (cr *ChatRoom) HandleRemote(cc *ChatCommand, h host.Host) error {
 		}
 		// fmt.Println(cc.SenderNick, ": ", cc.Params[1])
 		printLine(cc.SenderNick, cc.Params[1])
+		return nil
+	case ".who":
+		// force all to reveal themselves
+		iam := cr.nick + " " + shortID(h.ID()) + "\n"
+		// respond with a message
+		if err := cr.Publish(iam); err != nil {
+			fmt.Println("publish error:", err)
+		}
 		return nil
 	default:
 		return errNotFound

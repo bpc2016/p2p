@@ -41,7 +41,7 @@ var (
 	errBadSyntax = errors.New("bad command syntax")
 )
 
-// RPCs all prefixed with '/'
+// RPCs all prefixed with '.'
 func (cc *ChatCommand) Find(rest string) error {
 	switch cc.Cmd {
 	case ".join":
@@ -51,7 +51,7 @@ func (cc *ChatCommand) Find(rest string) error {
 		}
 		cc.Params = []string{str}
 		return nil
-	case ".peers":
+	case ".peers", ".who":
 		return nil
 	case ".to":
 		if !strings.Contains(rest, ":") {
@@ -72,7 +72,7 @@ func (cc *ChatCommand) Find(rest string) error {
 // verify the cmd exists and syntax is right, use string `rest` to fill `prs` if nec
 func (cr *ChatRoom) find(cmd string, prs *[]string, rest string) error {
 	switch cmd {
-	case "/join", "/help", "/h":
+	case "/join", "/help", "/h", "/test":
 		str := strings.TrimSpace(rest)
 		*prs = []string{str}
 
@@ -132,6 +132,8 @@ func (cr *ChatRoom) HandleLocal(msg *pubsub.Message, h host.Host) {
 	case "/help", "/h":
 		it := prs[0]
 		gethelp(it)
-		// fmt.Printf("asked for topic %s\n", it)
+	case "/test": // test <addr> sends a private message there
+		to := prs[0]
+		cr.Private(to, "get addr", []byte("this is it"))
 	}
 }
