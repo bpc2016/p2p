@@ -3,9 +3,9 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -22,6 +22,7 @@ import (
 
 type application struct {
 	debug bool
+	help  map[string]string
 }
 
 var my application
@@ -34,7 +35,17 @@ func main() {
 
 	flag.Parse()
 	ctx := context.Background()
-	my.debug = *debugF
+
+	// this app requires internet connectivity
+	if !connected() {
+		panic("check your internet connection")
+	}
+
+	// setup the appllication
+	my = application{
+		debug: *debugF, // if set, makes app less verbose
+		help:  help,    // help called with .help
+	}
 
 	listener := fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", *portF)
 	h, err := libp2p.New(libp2p.ListenAddrStrings(listener))
@@ -72,8 +83,19 @@ func main() {
 
 	cr.homeTopic = cr.topic // keep this one, for use by the `.home` command
 
+	println("You have to be online for this to work!")
+
+	// println("best to start with a nickname: if you havent already, type '.bye' and start again with flag '-nick <yournickname>'")
+	gethelp("0")
 	// loop that prints responses, user sends message `.bye` to quit
 	cr.printMessagesFrom(h) // h so that we can use JoinChat
+}
+
+func connected() bool {
+	if _, err := http.Get("http://clients3.google.com/generate_204"); err != nil {
+		return false
+	}
+	return true
 }
 
 // my own println - replace a verbiage with x
@@ -188,23 +210,23 @@ OUT:
 	}
 }
 
-// remote function calls
+// remote function calls all are like ".command"
 func (cr *ChatRoom) HandleRemote(cc *ChatCommand, h host.Host) error {
 	// typical example: shift room
 	switch cc.Cmd {
-	case "/join":
+	case ".join":
 		room := cc.Params[0] // already know this is nonempty
 		if err := cr.JoinChat(h, room); err != nil {
 			panic(err)
 		}
 		return nil
-	case "/peers":
+	case ".peers":
 		ids := cr.ListPeers()
 		for _, p := range ids {
 			fmt.Printf("%v\n", p)
 		}
 		return nil
-	case "/to":
+	case ".to":
 		if !strings.Contains(cc.Params[0], cr.nick) {
 			return nil // ignore message
 		}
@@ -213,43 +235,6 @@ func (cr *ChatRoom) HandleRemote(cc *ChatCommand, h host.Host) error {
 		return nil
 	default:
 		return errNotFound
-	}
-}
-
-// local commands look like `.join another_topic`
-func (cr *ChatRoom) HandleLocal(msg *pubsub.Message, h host.Host) {
-	cm := new(ChatMessage)
-	err := json.Unmarshal(msg.Data, cm)
-	if err != nil {
-		return
-	}
-	// really only want this for commands like `.join others``
-	if !strings.HasPrefix(cm.Message, ".") {
-		return
-	}
-	// verify this command exits, right syntax
-	cmd, prs := "", []string{}
-	if err := cr.ParseLocalCommand(&cmd, &prs, cm); err != nil {
-		return
-	}
-
-	switch cmd {
-	case ".join":
-		room := prs[0] // already know this is nonempty
-		if err := cr.JoinChat(h, room); err != nil {
-			panic(err)
-		}
-	case ".home": // return to base
-		if err := cr.Publish(fmt.Sprintf(".join %s", cr.home)); err != nil {
-			return
-		}
-	case ".peers": // list peers
-		ids := cr.ListPeers()
-		for _, p := range ids {
-			fmt.Printf("%v\n", p)
-		}
-	case ".bye": // exit program
-		cr.quit <- struct{}{}
 	}
 }
 
