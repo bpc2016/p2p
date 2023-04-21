@@ -72,7 +72,7 @@ func (cc *ChatCommand) Find(rest string) error {
 // verify the cmd exists and syntax is right, use string `rest` to fill `prs` if nec
 func (cr *ChatRoom) find(cmd string, prs *[]string, rest string) error {
 	switch cmd {
-	case "/join", "/help":
+	case "/join", "/help", "/h":
 		str := strings.TrimSpace(rest)
 		*prs = []string{str}
 
@@ -88,7 +88,7 @@ func (cr *ChatRoom) find(cmd string, prs *[]string, rest string) error {
 			}
 		}
 		return nil
-	case "/home", "/peers", "/bye":
+	case "/home", "/peers", "/quit", "/q":
 		return nil
 	default:
 		return errNotFound
@@ -127,9 +127,9 @@ func (cr *ChatRoom) HandleLocal(msg *pubsub.Message, h host.Host) {
 		for _, p := range ids {
 			fmt.Printf("%v\n", p)
 		}
-	case "/bye": // exit program
+	case "/quit", "/q": // exit program
 		cr.quit <- struct{}{}
-	case "/help":
+	case "/help", "/h":
 		it := prs[0]
 		gethelp(it)
 		// fmt.Printf("asked for topic %s\n", it)

@@ -113,7 +113,6 @@ func (cr *ChatRoom) readLoop(h host.Host) {
 		}
 		// only forward messages delivered by others
 		if msg.ReceivedFrom == cr.self {
-			println()
 			cr.HandleLocal(msg, h)
 			continue
 		}
@@ -123,11 +122,11 @@ func (cr *ChatRoom) readLoop(h host.Host) {
 			continue
 		}
 		// is this a local command?
-		if strings.HasPrefix(cm.Message, ".") {
+		if strings.HasPrefix(cm.Message, "/") {
 			continue
 		}
 		// is this a remote command?
-		if strings.HasPrefix(cm.Message, "/") {
+		if strings.HasPrefix(cm.Message, ".") {
 			cc := new(ChatCommand)
 			if err := cc.ParseCommand(cm); err != nil {
 				continue

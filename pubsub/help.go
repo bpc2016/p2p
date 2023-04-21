@@ -11,7 +11,7 @@ var help = map[string]string{
 Welcome to our chatroom!
 Best to start with a nickname: if you haven't already, 
 Restart and use a nickname, like so:
-	/bye
+	/quit
 	./chat -nick <yournickname>
 
 type /help for a list of topics.

@@ -85,12 +85,16 @@ func main() {
 
 	println("You have to be online for this to work!")
 
-	// println("best to start with a nickname: if you havent already, type '.bye' and start again with flag '-nick <yournickname>'")
+	// welcome
 	gethelp("0")
-	// loop that prints responses, user sends message `.bye` to quit
+
+	// loop that prints responses, user send message `/quit` to quit
 	cr.printMessagesFrom(h) // h so that we can use JoinChat
 }
 
+//---------------  tools -------------
+
+// check if we have a live internete connection
 func connected() bool {
 	if _, err := http.Get("http://clients3.google.com/generate_204"); err != nil {
 		return false
@@ -184,7 +188,7 @@ func (cr *ChatRoom) streamConsoleTo() {
 func printLine(from, msg string) (n int, err error) {
 	// Green console colour: 	\x1b[32m
 	// Reset console colour: 	\x1b[0m
-	return fmt.Printf("\x1b[32m%s\x1b[0m: %s\n\n", from, msg)
+	return fmt.Printf("\x1b[32m%s\x1b[0m: %s", from, msg)
 }
 
 // for multiplexed chat usage - use with readloop
