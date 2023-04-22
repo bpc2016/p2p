@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
+	"regexp"
 	"sync"
 	"time"
 
@@ -172,15 +172,30 @@ func (cr *ChatRoom) discoverPeers(ctx context.Context, h host.Host) {
 
 // capture keystrokes and produce messages
 // ctx and topic taken care of by chatroom
-func (cr *ChatRoom) streamConsoleTo() {
+func (cr *ChatRoom) streamConsoleTo(h host.Host) {
+	reloc := regexp.MustCompile("^/")
+
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		s, err := reader.ReadString('\n')
 		if err != nil {
 			panic(err)
 		}
-		if err := cr.Publish(s); err != nil {
-			fmt.Println("### Publish error:", err)
+		if reloc.MatchString(s) {
+			fmt.Printf("skipping this: %q\n", s)
+			cr.handleLocal(s, h)
+			continue
+		}
+
+		// some messages *are not* public
+		to := ""
+		if err := Private(s, &to); err != nil {
+			panic(err)
+		}
+
+		// publish
+		if err := cr.Publish(s, to); err != nil {
+			panic(err)
 		}
 	}
 }
@@ -198,11 +213,9 @@ OUT:
 	for {
 		select {
 		case cm := <-cr.Messages:
-			// gather nick --> peerid mappinng
 			// fmt.Println(cm.SenderNick, ": ", cm.Message)
 			printLine(cm.SenderNick, cm.Message)
 		case cc := <-cr.Commands:
-			// fmt.Println(cc.SenderNick, ">> ", cc.Cmd, cc.Params)
 			if err := cr.HandleRemote(cc, h); err != nil {
 				fmt.Printf("handle command error: %v\n", err)
 				continue
@@ -215,42 +228,6 @@ OUT:
 	}
 }
 
-// remote function calls all are like ".command"
-func (cr *ChatRoom) HandleRemote(cc *ChatCommand, h host.Host) error {
-	// typical example: shift room
-	switch cc.Cmd {
-	case ".join":
-		room := cc.Params[0] // already know this is nonempty
-		if err := cr.JoinChat(h, room); err != nil {
-			panic(err)
-		}
-		return nil
-	case ".peers":
-		ids := cr.ListPeers()
-		for _, p := range ids {
-			fmt.Printf("%v\n", p)
-		}
-		return nil
-	case ".to":
-		if !strings.Contains(cc.Params[0], cr.nick) {
-			return nil // ignore message
-		}
-		// fmt.Println(cc.SenderNick, ": ", cc.Params[1])
-		printLine(cc.SenderNick, cc.Params[1])
-		return nil
-	case ".who":
-		// force all to reveal themselves
-		iam := cr.nick + " " + shortID(h.ID()) + "\n"
-		// respond with a message
-		if err := cr.Publish(iam); err != nil {
-			fmt.Println("publish error:", err)
-		}
-		return nil
-	default:
-		return errNotFound
-	}
-}
-
 // defaultNick generates a nickname based on the $USER environment variable and
 // the last 8 chars of a peer ID.
 func defaultNick(p peer.ID) string {
@@ -259,6 +236,6 @@ func defaultNick(p peer.ID) string {
 
 // shortID returns the last 8 chars of a base58-encoded peer id.
 func shortID(p peer.ID) string {
-	pretty := p.Pretty()
+	pretty := p.String()
 	return pretty[len(pretty)-8:]
 }

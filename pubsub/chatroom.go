@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -40,6 +41,7 @@ type ChatRoom struct {
 // ChatMessage gets converted to/from JSON and sent in the body of pubsub messages.
 type ChatMessage struct {
 	Message    string
+	To         string
 	Payload    []byte
 	SenderID   string
 	SenderNick string
@@ -80,7 +82,7 @@ func (cr *ChatRoom) JoinChat(h host.Host, roomName string) error {
 	go cr.discoverPeers(cr.ctx, h)
 
 	// write message
-	go cr.streamConsoleTo()
+	go cr.streamConsoleTo(h)
 
 	// start reading messages from the subscription in a loop
 	go cr.readLoop(h)
@@ -88,27 +90,16 @@ func (cr *ChatRoom) JoinChat(h host.Host, roomName string) error {
 }
 
 // Publish sends a message to the pubsub topic.
-func (cr *ChatRoom) Publish(message string) error {
+func (cr *ChatRoom) Publish(message string, to string, payload ...[]byte) error {
 	m := ChatMessage{
 		Message:    message,
+		To:         to,
 		SenderID:   cr.self.Pretty(),
 		SenderNick: cr.nick,
 	}
-	msgBytes, err := json.Marshal(m)
-	if err != nil {
-		return err
-	}
-	return cr.topic.Publish(cr.ctx, msgBytes)
-}
 
-// publish a private message to `to` with parameters `message` and payload `data`
-func (cr *ChatRoom) Private(to, params string, data []byte) error {
-	m := ChatMessage{
-		Message:    ":" + to + ":" + params,
-		Payload:    data,
-		SenderID:   cr.self.Pretty(),
-		SenderNick: cr.nick,
-	}
+	// fmt.Printf("** message: %s to %q\n", m.Message, m.To) // ***
+
 	msgBytes, err := json.Marshal(m)
 	if err != nil {
 		return err
@@ -138,10 +129,20 @@ func (cr *ChatRoom) readLoop(h host.Host) {
 		if err != nil {
 			continue
 		}
-		// is this a local command?
-		if strings.HasPrefix(cm.Message, "/") {
+
+		fmt.Printf("## Msg: %v   To: %q\n", cm.Message, cm.To) // ****
+
+		// is this personal message, skip if not mine
+		minere := regexp.MustCompile(shortID(h.ID()))
+		if cm.To != "" && !minere.MatchString(cm.To) {
 			continue
 		}
+		// is this a local command?
+		if strings.HasPrefix(cm.Message, "/") {
+			fmt.Println(".. local command, NOT skipped")
+			// continue
+		}
+
 		// is this a remote command?
 		if strings.HasPrefix(cm.Message, ".") {
 			cc := new(ChatCommand)
@@ -152,15 +153,7 @@ func (cr *ChatRoom) readLoop(h host.Host) {
 			cr.Commands <- cc
 			continue
 		}
-		// is this personal message
-		personal := strings.Join([]string{":", shortID(h.ID()), ":"}, "")
-		minre := regexp.MustCompile(personal)
-		if minre.MatchString(cm.Message) {
-			// strip my ID - leaves the remote comand, data in cm.Payload
-			cm.Message = minre.ReplaceAllString(cm.Message, "")
-			// cr.Messages <- cm
-			// continue
-		}
+
 		// send valid messages onto the Messages channel
 		cr.Messages <- cm
 	}
