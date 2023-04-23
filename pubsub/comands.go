@@ -1,12 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
-	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/host"
 )
 
@@ -18,7 +17,28 @@ type ChatCommand struct {
 	Payload    []byte
 }
 
-// move to commands.go
+/*
+// now used with remote calls
+func (cr *ChatRoom) WasparseCommand(cc *ChatCommand, cm *ChatMessage, h host.Host) error {
+	cc.SenderID = cm.SenderID
+	cc.SenderNick = cm.SenderNick
+	cc.Payload = cm.Payload
+	// str := strings.TrimSuffix(cm.Message, "\n")
+	// arr := strings.Split(string(str), " ")
+	re := regexp.MustCompile(`(\S+)\s*(.*)`)
+	cc.Cmd = re.ReplaceAllString(cm.Message, "$1")
+	// rest := strings.Join(arr[1:], " ")
+	// check if the command exist, right length : return error else
+	s := cm.Message // join as was originally presented
+	// err := cr.handleCommands(&s, &cm.To, nil)
+	// if err == errSkip { // only passed when the command is purely local
+	// 	return nil
+	// }
+	// return err
+	return cr.handleCommands(&s, &cm.To, h)
+}
+
+// previous version
 func (cc *ChatCommand) ParseCommand(cm *ChatMessage) error {
 	cc.SenderID = cm.SenderID
 	cc.SenderNick = cm.SenderNick
@@ -30,6 +50,7 @@ func (cc *ChatCommand) ParseCommand(cm *ChatMessage) error {
 	// check if the command exist, right length : return error else
 	return cc.Find(rest)
 }
+*/
 
 // return the short form of the senderID
 func (cc *ChatCommand) Sender() (sender string) {
@@ -38,19 +59,28 @@ func (cc *ChatCommand) Sender() (sender string) {
 	return
 }
 
-func (cr *ChatRoom) ParseLocalCommand(cd *string, prs *[]string, cm *ChatMessage) error {
-	str := strings.TrimSuffix(cm.Message, "\n")
-	arr := strings.Split(string(str), " ")
-	*cd = arr[0]
-	rest := strings.Join(arr[1:], " ")
-	return cr.find(*cd, prs, rest)
+// return the short form of the senderID
+func (cm *ChatMessage) Sender() (sender string) {
+	sender = cm.SenderID
+	sender = sender[len(sender)-8:]
+	return
 }
 
+// func (cr *ChatRoom) ParseLocalCommand(cd *string, prs *[]string, cm *ChatMessage) error {
+// 	str := strings.TrimSuffix(cm.Message, "\n")
+// 	arr := strings.Split(string(str), " ")
+// 	*cd = arr[0]
+// 	rest := strings.Join(arr[1:], " ")
+// 	return cr.find(*cd, prs, rest)
+// }
+
 var (
-	errNotFound  = errors.New("command not found")
-	errBadSyntax = errors.New("bad command syntax")
+	// errNotFound = errors.New("command not found")
+	// errBadSyntax = errors.New("bad command syntax")
+	errSkip = errors.New("skip this input")
 )
 
+/*
 // RPCs all prefixed with '.'
 func (cc *ChatCommand) Find(rest string) error {
 	switch cc.Cmd {
@@ -64,7 +94,9 @@ func (cc *ChatCommand) Find(rest string) error {
 		return errNotFound
 	}
 }
+*/
 
+/*
 // remote function calls all are like ".command"
 func (cr *ChatRoom) HandleRemote(cc *ChatCommand, h host.Host) error {
 	// typical example: shift room
@@ -116,12 +148,14 @@ func (cr *ChatRoom) HandleRemote(cc *ChatCommand, h host.Host) error {
 		return errNotFound
 	}
 }
+*/
 
+/*
 // local commands all prefixed with '/'
 // verify the cmd exists and syntax is right, use string `rest` to fill `prs` if nec
 func (cr *ChatRoom) find(cmd string, prs *[]string, rest string) error {
 
-	fmt.Printf("enter `find` with rest: %q\n", rest)
+	fmt.Printf("enter ONCE `find` with rest: %q\n", rest)
 
 	switch cmd {
 	case "/join", "/help", "/h", "/test", "/request", "/fetch":
@@ -148,7 +182,46 @@ func (cr *ChatRoom) find(cmd string, prs *[]string, rest string) error {
 	}
 }
 
-func (cr *ChatRoom) handleLocal(s string, h host.Host) {
+*/
+
+// replaces Oldhandlelocals
+func (cr *ChatRoom) handleCommands(s, to *string, payload *[]byte, h host.Host) error {
+	re := regexp.MustCompile(`(\S+)\s*(.*)\n`)
+	cmd := re.ReplaceAllString(*s, "$1")
+	pars := re.ReplaceAllString(*s, "$2")
+
+	// fmt.Printf("command: %q, parameters: %q\n", cmd, pars) // *****
+
+	switch cmd {
+	case "/fetch": // fetch <addr>
+		addr := pars // readdr.ReplaceAllString(pars, "$1")
+		// return this as a byte array
+		*payload = []byte(strings.ToUpper(addr))
+		*s = "in the payload\n"
+	case "/to": // formmat /to <addr> message
+		readdr := regexp.MustCompile(`(\S+)\s*(.*)`)
+		// the single address follows directly, match this with `readLoop`
+		*to = readdr.ReplaceAllString(pars, "$1")
+		*s = readdr.ReplaceAllString(pars, "$2")
+		*s += "\n" // we lose this one ...
+	case "/peers": // example of a `local command`: never published
+		//            purely for information to the user
+		for _, p := range cr.ListPeers() {
+			fmt.Printf("%v\n", p)
+		}
+		return errSkip
+	case "/iam":
+		*s = cr.nick + " = " + shortID(h.ID()) + "\n"
+	case "/quit", "/q":
+		cr.quit <- struct{}{}
+	default:
+		return fmt.Errorf("unknown command: %q", cmd)
+	}
+	return nil
+}
+
+/*
+func (cr *ChatRoom) OldhandleLocal(s string, h host.Host) {
 
 	// wrap the message up
 	cm := &ChatMessage{Message: s} //new(ChatMessage)
@@ -195,7 +268,9 @@ func (cr *ChatRoom) handleLocal(s string, h host.Host) {
 		cr.Publish("/peers\n", to)
 	}
 }
+*/
 
+/*
 // local commands look like `/join another_topic`
 func (cr *ChatRoom) HandleLocal(msg *pubsub.Message, h host.Host) {
 	cm := new(ChatMessage)
@@ -240,7 +315,9 @@ func (cr *ChatRoom) HandleLocal(msg *pubsub.Message, h host.Host) {
 		cr.Publish("/peers\n", to)
 	}
 }
+*/
 
+/*
 func Private(msg string, to *string) error {
 	parts := strings.Split(msg, " ")
 	switch parts[0] {
@@ -252,3 +329,5 @@ func Private(msg string, to *string) error {
 	}
 	return nil
 }
+
+*/

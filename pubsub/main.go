@@ -3,13 +3,13 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"regexp"
 	"sync"
-	"time"
 
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -173,6 +173,40 @@ func (cr *ChatRoom) discoverPeers(ctx context.Context, h host.Host) {
 // capture keystrokes and produce messages
 // ctx and topic taken care of by chatroom
 func (cr *ChatRoom) streamConsoleTo(h host.Host) {
+	// we handle commands separately
+	// this leads directly to publishing
+	reloc := regexp.MustCompile("^/")
+
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		s, err := reader.ReadString('\n')
+		if err != nil {
+			panic(err)
+		}
+		//in case we have private messages
+		to := ""            // default: public
+		payload := []byte{} // empty
+
+		if reloc.MatchString(s) {
+			if err := cr.handleCommands(&s, &to, &payload, h); err != nil {
+				if err != errSkip {
+					fmt.Printf("%v\n", err)
+				}
+				continue
+			}
+		}
+
+		// publish
+		if err := cr.Publish(s, to); err != nil {
+			panic(err)
+		}
+	}
+}
+
+/*
+// capture keystrokes and produce messages
+// ctx and topic taken care of by chatroom
+func (cr *ChatRoom) OldstreamConsoleTo(h host.Host) {
 	reloc := regexp.MustCompile("^/")
 
 	reader := bufio.NewReader(os.Stdin)
@@ -183,7 +217,7 @@ func (cr *ChatRoom) streamConsoleTo(h host.Host) {
 		}
 		if reloc.MatchString(s) {
 			fmt.Printf("skipping this: %q\n", s)
-			cr.handleLocal(s, h)
+			// cr.handleLocal(s, h)
 			continue
 		}
 
@@ -199,6 +233,7 @@ func (cr *ChatRoom) streamConsoleTo(h host.Host) {
 		}
 	}
 }
+*/
 
 func printLine(from, msg string) (n int, err error) {
 	// Green console colour: 	\x1b[32m
@@ -207,7 +242,33 @@ func printLine(from, msg string) (n int, err error) {
 }
 
 // for multiplexed chat usage - use with readloop
+// this is the final routine in `main`, so breaking
+// out of the loop terminates the whole app
 func (cr *ChatRoom) printMessagesFrom(h host.Host) {
+OUT:
+	for {
+		select {
+		case cm := <-cr.Messages:
+			printLine(cm.SenderNick, cm.Message)
+			PrintJSON(cm)
+
+		case cc := <-cr.Commands:
+			fmt.Printf("command: %v\n", cc)
+			// if err := cr.HandleRemote(cc, h); err != nil {
+			// 	fmt.Printf("handle command error: %v\n", err)
+			// 	continue
+			// }
+			continue
+
+		case <-cr.quit:
+			break OUT
+		}
+	}
+}
+
+/*
+// for multiplexed chat usage - use with readloop
+func (cr *ChatRoom) OldprintMessagesFrom(h host.Host) {
 	ticker := time.NewTicker(5 * time.Second)
 OUT:
 	for {
@@ -227,6 +288,7 @@ OUT:
 		}
 	}
 }
+*/
 
 // defaultNick generates a nickname based on the $USER environment variable and
 // the last 8 chars of a peer ID.
@@ -238,4 +300,15 @@ func defaultNick(p peer.ID) string {
 func shortID(p peer.ID) string {
 	pretty := p.String()
 	return pretty[len(pretty)-8:]
+}
+
+// PrintJSON gives a pretty representation
+// of the contents of struct variable <c>
+func PrintJSON(c interface{}) error {
+	toSend, err := json.MarshalIndent(c, "", "   ")
+	if err != nil {
+		return fmt.Errorf("jsonisplay MarshalIndent: %v", err)
+	}
+	println(string(toSend))
+	return nil
 }

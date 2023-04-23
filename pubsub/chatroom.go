@@ -121,6 +121,57 @@ func (cr *ChatRoom) readLoop(h host.Host) {
 		}
 		// only forward messages delivered by others
 		if msg.ReceivedFrom == cr.self {
+			//cr.HandleLocal(msg, h)
+			continue
+		}
+
+		cm := new(ChatMessage)
+		err = json.Unmarshal(msg.Data, cm)
+		if err != nil {
+			continue
+		}
+
+		// fmt.Printf("## Msg: %v   To: %qfe\n", cm.Message, cm.To) // ****
+
+		// PrintJSON(cm)
+
+		// is this personal message, skip if not mine
+		minere := regexp.MustCompile(shortID(h.ID()))
+		if cm.To != "" && !minere.MatchString(cm.To) {
+			continue
+		}
+
+		// is this a remote command?
+		if strings.HasPrefix(cm.Message, "/") {
+			cm.To = ""
+			payload := []byte{}
+			if err := cr.handleCommands(&cm.Message, &cm.To, &payload, h); err != nil {
+				fmt.Printf("handlecomands error: %v/n", err)
+				continue
+			}
+			// otherwise , just publish it, back to sender
+			if err := cr.Publish(cm.Message, cm.Sender(), payload); err != nil {
+				fmt.Printf("publish error: %v/n", err)
+			}
+			continue // anyway
+		}
+
+		// send valid messages onto the Messages channel
+		cr.Messages <- cm
+	}
+}
+
+/*
+// readLoop pulls messages from the pubsub topic and pushes them onto the Messages channel.
+func (cr *ChatRoom) OldreadLoop(h host.Host) {
+	for {
+		msg, err := cr.sub.Next(cr.ctx)
+		if err != nil {
+			close(cr.Messages)
+			return
+		}
+		// only forward messages delivered by others
+		if msg.ReceivedFrom == cr.self {
 			cr.HandleLocal(msg, h)
 			continue
 		}
@@ -158,6 +209,7 @@ func (cr *ChatRoom) readLoop(h host.Host) {
 		cr.Messages <- cm
 	}
 }
+*/
 
 func topicName(roomName string) string {
 	return "chat-room:" + roomName

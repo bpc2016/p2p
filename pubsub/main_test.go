@@ -1,11 +1,7 @@
 package main
 
-import (
-	"testing"
-)
-
 // so that we can use app.applications here, invoke db
-func setup() (*application, ChatRoom) {
+func Setup() (*application, ChatRoom) {
 
 	// Initialize  the application with its dependencies.
 	app := &application{
@@ -15,6 +11,7 @@ func setup() (*application, ChatRoom) {
 	return app, cr
 }
 
+/*
 // fp.gather returns a list of all related pages from fullpage
 func TestHelp(t *testing.T) {
 	// initialize ap, cr
@@ -47,3 +44,4 @@ func TestHelp(t *testing.T) {
 		// }
 	}
 }
+*/
