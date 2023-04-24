@@ -22,9 +22,6 @@ const ChatRoomBufSize = 128
 type ChatRoom struct {
 	// Messages is a channel of messages received from other peers in the chat room
 	Messages chan *ChatMessage
-	// Commands is a channel for commands issued these are produced from messages - see commands.go
-	// Commands chan *ChatCommand
-
 	// Data is a channel for binary carried as payload
 	Data chan *ChatData
 
@@ -78,14 +75,11 @@ func (cr *ChatRoom) JoinChat(h host.Host, roomName string) error {
 		return err
 	}
 
-	// fmt.Printf("--- I am %s and joining topic %s\n", cr.nick, topic.String())
-
 	cr.topic = topic
 	cr.sub = sub
 	cr.roomName = roomName
 	cr.Messages = make(chan *ChatMessage, ChatRoomBufSize)
 	cr.Data = make(chan *ChatData, ChatRoomBufSize)
-	// cr.Commands = make(chan *ChatCommand, ChatRoomBufSize)
 
 	// use DHT
 	go cr.discoverPeers(cr.ctx, h)
@@ -131,7 +125,6 @@ func (cr *ChatRoom) readLoop(h host.Host) {
 		}
 		// only forward messages delivered by others
 		if msg.ReceivedFrom == cr.self {
-			//cr.HandleLocal(msg, h)
 			continue
 		}
 
@@ -149,9 +142,6 @@ func (cr *ChatRoom) readLoop(h host.Host) {
 
 		// is this a remote command?
 		if strings.HasPrefix(cm.Message, "/") {
-
-			// fmt.Printf("=== got '/' msg %q to %q with %q\n", cm.Message, cm.To, string(cm.Payload)) // ***
-
 			if !cr.validCommand(cm.Message) {
 				fmt.Printf("invalid command : %q\n", cm.Message)
 				continue
@@ -163,19 +153,14 @@ func (cr *ChatRoom) readLoop(h host.Host) {
 				fmt.Printf("handlecomands error: %v\n", err)
 				continue
 			}
-
-			// fmt.Printf("=== publish %q to %q with %q\n", cm.Message, cm.Sender(), string(p)) // ***
-
 			// new message back to sender
 			if err := cr.Publish(cm.Message, cm.Sender(), p); err != nil {
 				fmt.Printf("publish error: %v\n", err)
 			}
 			continue
 		}
-
-		// fmt.Printf("--- got 'clean' msg %q to %q with %q\n", cm.Message, cm.To, string(cm.Payload)) // ***
-
-		if cm.Payload != nil && string(cm.Payload) != "" { // strings.HasPrefix(cm.Message, "check") {
+		// send the payloaded messages to data channel
+		if cm.Payload != nil && string(cm.Payload) != "" {
 			data := new(ChatData)
 			data.Data = cm.Payload
 			data.SenderNick = cm.SenderNick
@@ -189,6 +174,7 @@ func (cr *ChatRoom) readLoop(h host.Host) {
 	}
 }
 
+// prefix the chatroom name (why?)
 func topicName(roomName string) string {
 	return "chat-room:" + roomName
 }
@@ -219,59 +205,5 @@ func JoinChatRoom(ctx context.Context, ps *pubsub.PubSub, selfID peer.ID, nickna
 		Messages: make(chan *ChatMessage, ChatRoomBufSize),
 	}
 
-	// start reading messages from the subscription in a loop
-	// go cr.readLoop()
 	return cr, nil
 }
-
-// ------------------ old ---------------------
-
-/*
-// readLoop pulls messages from the pubsub topic and pushes them onto the Messages channel.
-func (cr *ChatRoom) OldreadLoop(h host.Host) {
-	for {
-		msg, err := cr.sub.Next(cr.ctx)
-		if err != nil {
-			close(cr.Messages)
-			return
-		}
-		// only forward messages delivered by others
-		if msg.ReceivedFrom == cr.self {
-			cr.HandleLocal(msg, h)
-			continue
-		}
-		cm := new(ChatMessage)
-		err = json.Unmarshal(msg.Data, cm)
-		if err != nil {
-			continue
-		}
-
-		fmt.Printf("## Msg: %v   To: %q\n", cm.Message, cm.To) // ****
-
-		// is this personal message, skip if not mine
-		minere := regexp.MustCompile(shortID(h.ID()))
-		if cm.To != "" && !minere.MatchString(cm.To) {
-			continue
-		}
-		// is this a local command?
-		if strings.HasPrefix(cm.Message, "/") {
-			fmt.Println(".. local command, NOT skipped")
-			// continue
-		}
-
-		// is this a remote command?
-		if strings.HasPrefix(cm.Message, ".") {
-			cc := new(ChatCommand)
-			if err := cc.ParseCommand(cm); err != nil {
-				continue
-			}
-			// send valid comand
-			cr.Commands <- cc
-			continue
-		}
-
-		// send valid messages onto the Messages channel
-		cr.Messages <- cm
-	}
-}
-*/

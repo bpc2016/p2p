@@ -2,3 +2,5 @@ chatclients/chat
 relayserver/relay307
 changelog.md
 pubsub/chat
+junk/comands.go
+junk/cut1/main.go

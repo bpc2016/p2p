@@ -198,8 +198,6 @@ func (cr *ChatRoom) streamConsoleTo(h host.Host) {
 			payload = p
 		}
 
-		// fmt.Printf("--- publishing %q to %q with payload %q\n", s, to, string(payload))
-
 		// publish
 		if err := cr.Publish(s, to, payload); err != nil {
 			panic(err)
