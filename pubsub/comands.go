@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -9,13 +10,116 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 )
 
-type ChatCommand struct {
-	Cmd        string
-	SenderID   string
-	SenderNick string
-	Params     []string
-	Payload    []byte
+var (
+	errSkip = errors.New("skip this input")
+)
+
+// these are commands that appear at the target, see where they are checked
+func (cr *ChatRoom) validCommand(s string) bool {
+	re := regexp.MustCompile(`(\S+)\s*(.*)\n`)
+	cmd := re.ReplaceAllString(s, "$1")
+	switch cmd {
+	case "/fetch", "/check", "/to", "/who", "/iam", "/q", "/h", "/in",
+		"/iiam":
+		return true
+	}
+	return false
 }
+
+// prepare data for pulishing
+func (cr *ChatRoom) handleCommands(s, to *string, h host.Host) ([]byte, error) {
+	re := regexp.MustCompile(`(\S+)\s*(.*)\n`)
+	cmd := re.ReplaceAllString(*s, "$1")
+	pars := re.ReplaceAllString(*s, "$2")
+	payload := []byte{}
+	// fmt.Printf("command: %q, parameters: %q\n", cmd, pars) // *****
+
+	switch cmd {
+	case "/in": // given as '/in <user>'
+		user := pars
+		cr.inject(user)
+		return nil, errSkip
+	case "/fetch": // fetch <addr>, usually called as /to <user> /fetch <addr>
+		addr := pars
+		// return this as a byte slice
+		payload = sampleFetch(addr)
+		*s = "check the json payload\n"
+	case "/to": // formmat /to <addr> message
+		readdr := regexp.MustCompile(`(\S+)\s*(.*)`)
+		// the single address follows directly, match this with `readLoop`
+		*to = readdr.ReplaceAllString(pars, "$1")
+		if *to == "all" {
+			*to = ""
+		}
+		*s = fmt.Sprintf("%s\n", readdr.ReplaceAllString(pars, "$2"))
+	case "/peers": // example of a `local command`: never published
+		//            purely for information to the user
+		for _, p := range cr.ListPeers() {
+			fmt.Printf("%v\n", p)
+		}
+		return nil, errSkip
+	case "/who": // who is available: give me short IDs
+		*s = "/to all /iam\n"
+	case "/iam": // declare my short ID
+		*s = fmt.Sprintf("%s = %s\n", cr.nick, shortID(h.ID()))
+	case "/quit", "/q":
+		cr.quit <- struct{}{}
+	case "/help", "/h":
+		gethelp(pars)
+		return nil, errSkip
+	default:
+		return nil, fmt.Errorf("unknown command: %q", cmd)
+	}
+	return payload, nil
+}
+
+// a wraper for sampleFetch
+// we use /to <addr> /fetch <stuff> on the command line
+// instead, we have /inj <addr> with preset stuff
+func (cr *ChatRoom) inject(to string) {
+	cr.Publish("/fetch that stuff produced elsewhere\n", to, []byte{})
+}
+
+// typical, json encode the payload
+func sampleFetch(addr string) []byte {
+	type mine = struct {
+		Tag  string
+		Data string
+	}
+	obj := mine{
+		Tag:  addr,
+		Data: strings.ToUpper(addr),
+	}
+	bytes, _ := json.Marshal(obj) // ignore errors
+
+	// fmt.Printf("out: %v\n", bytes) // ****
+
+	return bytes
+}
+
+// return the short form of the senderID
+func (cm *ChatMessage) Sender() (sender string) {
+	sender = cm.SenderID
+	sender = sender[len(sender)-8:]
+	return
+}
+
+//--------------------- togo ---------------------------
+
+// type ChatCommand struct {
+// 	Cmd        string
+// 	SenderID   string
+// 	SenderNick string
+// 	Params     []string
+// 	Payload    []byte
+// }
+
+// return the short form of the senderID
+// func (cc *ChatCommand) Sender() (sender string) {
+// 	sender = cc.SenderID
+// 	sender = sender[len(sender)-8:]
+// 	return
+// }
 
 /*
 // now used with remote calls
@@ -52,20 +156,6 @@ func (cc *ChatCommand) ParseCommand(cm *ChatMessage) error {
 }
 */
 
-// return the short form of the senderID
-func (cc *ChatCommand) Sender() (sender string) {
-	sender = cc.SenderID
-	sender = sender[len(sender)-8:]
-	return
-}
-
-// return the short form of the senderID
-func (cm *ChatMessage) Sender() (sender string) {
-	sender = cm.SenderID
-	sender = sender[len(sender)-8:]
-	return
-}
-
 // func (cr *ChatRoom) ParseLocalCommand(cd *string, prs *[]string, cm *ChatMessage) error {
 // 	str := strings.TrimSuffix(cm.Message, "\n")
 // 	arr := strings.Split(string(str), " ")
@@ -73,12 +163,6 @@ func (cm *ChatMessage) Sender() (sender string) {
 // 	rest := strings.Join(arr[1:], " ")
 // 	return cr.find(*cd, prs, rest)
 // }
-
-var (
-	// errNotFound = errors.New("command not found")
-	// errBadSyntax = errors.New("bad command syntax")
-	errSkip = errors.New("skip this input")
-)
 
 /*
 // RPCs all prefixed with '.'
@@ -183,42 +267,6 @@ func (cr *ChatRoom) find(cmd string, prs *[]string, rest string) error {
 }
 
 */
-
-// replaces Oldhandlelocals
-func (cr *ChatRoom) handleCommands(s, to *string, payload *[]byte, h host.Host) error {
-	re := regexp.MustCompile(`(\S+)\s*(.*)\n`)
-	cmd := re.ReplaceAllString(*s, "$1")
-	pars := re.ReplaceAllString(*s, "$2")
-
-	// fmt.Printf("command: %q, parameters: %q\n", cmd, pars) // *****
-
-	switch cmd {
-	case "/fetch": // fetch <addr>
-		addr := pars // readdr.ReplaceAllString(pars, "$1")
-		// return this as a byte array
-		*payload = []byte(strings.ToUpper(addr))
-		*s = "in the payload\n"
-	case "/to": // formmat /to <addr> message
-		readdr := regexp.MustCompile(`(\S+)\s*(.*)`)
-		// the single address follows directly, match this with `readLoop`
-		*to = readdr.ReplaceAllString(pars, "$1")
-		*s = readdr.ReplaceAllString(pars, "$2")
-		*s += "\n" // we lose this one ...
-	case "/peers": // example of a `local command`: never published
-		//            purely for information to the user
-		for _, p := range cr.ListPeers() {
-			fmt.Printf("%v\n", p)
-		}
-		return errSkip
-	case "/iam":
-		*s = cr.nick + " = " + shortID(h.ID()) + "\n"
-	case "/quit", "/q":
-		cr.quit <- struct{}{}
-	default:
-		return fmt.Errorf("unknown command: %q", cmd)
-	}
-	return nil
-}
 
 /*
 func (cr *ChatRoom) OldhandleLocal(s string, h host.Host) {

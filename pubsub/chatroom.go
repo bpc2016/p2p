@@ -23,7 +23,10 @@ type ChatRoom struct {
 	// Messages is a channel of messages received from other peers in the chat room
 	Messages chan *ChatMessage
 	// Commands is a channel for commands issued these are produced from messages - see commands.go
-	Commands chan *ChatCommand
+	// Commands chan *ChatCommand
+
+	// Data is a channel for binary carried as payload
+	Data chan *ChatData
 
 	ctx   context.Context
 	ps    *pubsub.PubSub
@@ -44,6 +47,11 @@ type ChatMessage struct {
 	To         string
 	Payload    []byte
 	SenderID   string
+	SenderNick string
+}
+
+type ChatData struct {
+	Data       []byte
 	SenderNick string
 }
 
@@ -76,7 +84,8 @@ func (cr *ChatRoom) JoinChat(h host.Host, roomName string) error {
 	cr.sub = sub
 	cr.roomName = roomName
 	cr.Messages = make(chan *ChatMessage, ChatRoomBufSize)
-	cr.Commands = make(chan *ChatCommand, ChatRoomBufSize)
+	cr.Data = make(chan *ChatData, ChatRoomBufSize)
+	// cr.Commands = make(chan *ChatCommand, ChatRoomBufSize)
 
 	// use DHT
 	go cr.discoverPeers(cr.ctx, h)
@@ -90,10 +99,11 @@ func (cr *ChatRoom) JoinChat(h host.Host, roomName string) error {
 }
 
 // Publish sends a message to the pubsub topic.
-func (cr *ChatRoom) Publish(message string, to string, payload ...[]byte) error {
+func (cr *ChatRoom) Publish(message string, to string, payload []byte) error {
 	m := ChatMessage{
 		Message:    message,
 		To:         to,
+		Payload:    payload,
 		SenderID:   cr.self.Pretty(),
 		SenderNick: cr.nick,
 	}
@@ -131,10 +141,6 @@ func (cr *ChatRoom) readLoop(h host.Host) {
 			continue
 		}
 
-		// fmt.Printf("## Msg: %v   To: %qfe\n", cm.Message, cm.To) // ****
-
-		// PrintJSON(cm)
-
 		// is this personal message, skip if not mine
 		minere := regexp.MustCompile(shortID(h.ID()))
 		if cm.To != "" && !minere.MatchString(cm.To) {
@@ -143,23 +149,82 @@ func (cr *ChatRoom) readLoop(h host.Host) {
 
 		// is this a remote command?
 		if strings.HasPrefix(cm.Message, "/") {
-			cm.To = ""
-			payload := []byte{}
-			if err := cr.handleCommands(&cm.Message, &cm.To, &payload, h); err != nil {
-				fmt.Printf("handlecomands error: %v/n", err)
+
+			// fmt.Printf("=== got '/' msg %q to %q with %q\n", cm.Message, cm.To, string(cm.Payload)) // ***
+
+			if !cr.validCommand(cm.Message) {
+				fmt.Printf("invalid command : %q\n", cm.Message)
 				continue
 			}
-			// otherwise , just publish it, back to sender
-			if err := cr.Publish(cm.Message, cm.Sender(), payload); err != nil {
-				fmt.Printf("publish error: %v/n", err)
+			cm.To = ""
+			// prep, if there is a payload, it comes out here as `p`
+			p, err := cr.handleCommands(&cm.Message, &cm.To, h)
+			if err != nil {
+				fmt.Printf("handlecomands error: %v\n", err)
+				continue
 			}
-			continue // anyway
+
+			// fmt.Printf("=== publish %q to %q with %q\n", cm.Message, cm.Sender(), string(p)) // ***
+
+			// new message back to sender
+			if err := cr.Publish(cm.Message, cm.Sender(), p); err != nil {
+				fmt.Printf("publish error: %v\n", err)
+			}
+			continue
 		}
 
+		// fmt.Printf("--- got 'clean' msg %q to %q with %q\n", cm.Message, cm.To, string(cm.Payload)) // ***
+
+		if cm.Payload != nil && string(cm.Payload) != "" { // strings.HasPrefix(cm.Message, "check") {
+			data := new(ChatData)
+			data.Data = cm.Payload
+			data.SenderNick = cm.SenderNick
+			// send both
+			cr.Messages <- cm
+			cr.Data <- data
+			continue
+		}
 		// send valid messages onto the Messages channel
 		cr.Messages <- cm
 	}
 }
+
+func topicName(roomName string) string {
+	return "chat-room:" + roomName
+}
+
+// JoinChatRoom tries to subscribe to the PubSub topic for the room name, returning
+// a ChatRoom on success.
+func JoinChatRoom(ctx context.Context, ps *pubsub.PubSub, selfID peer.ID, nickname string, roomName string) (*ChatRoom, error) {
+	// join the pubsub topic
+	topic, err := ps.Join(topicName(roomName))
+	if err != nil {
+		return nil, err
+	}
+
+	// and subscribe to it
+	sub, err := topic.Subscribe()
+	if err != nil {
+		return nil, err
+	}
+
+	cr := &ChatRoom{
+		ctx:      ctx,
+		ps:       ps,
+		topic:    topic,
+		sub:      sub,
+		self:     selfID,
+		nick:     nickname,
+		roomName: roomName,
+		Messages: make(chan *ChatMessage, ChatRoomBufSize),
+	}
+
+	// start reading messages from the subscription in a loop
+	// go cr.readLoop()
+	return cr, nil
+}
+
+// ------------------ old ---------------------
 
 /*
 // readLoop pulls messages from the pubsub topic and pushes them onto the Messages channel.
@@ -210,39 +275,3 @@ func (cr *ChatRoom) OldreadLoop(h host.Host) {
 	}
 }
 */
-
-func topicName(roomName string) string {
-	return "chat-room:" + roomName
-}
-
-// ------------------ old ---------------------
-// JoinChatRoom tries to subscribe to the PubSub topic for the room name, returning
-// a ChatRoom on success.
-func JoinChatRoom(ctx context.Context, ps *pubsub.PubSub, selfID peer.ID, nickname string, roomName string) (*ChatRoom, error) {
-	// join the pubsub topic
-	topic, err := ps.Join(topicName(roomName))
-	if err != nil {
-		return nil, err
-	}
-
-	// and subscribe to it
-	sub, err := topic.Subscribe()
-	if err != nil {
-		return nil, err
-	}
-
-	cr := &ChatRoom{
-		ctx:      ctx,
-		ps:       ps,
-		topic:    topic,
-		sub:      sub,
-		self:     selfID,
-		nick:     nickname,
-		roomName: roomName,
-		Messages: make(chan *ChatMessage, ChatRoomBufSize),
-	}
-
-	// start reading messages from the subscription in a loop
-	// go cr.readLoop()
-	return cr, nil
-}

@@ -188,16 +188,20 @@ func (cr *ChatRoom) streamConsoleTo(h host.Host) {
 		payload := []byte{} // empty
 
 		if reloc.MatchString(s) {
-			if err := cr.handleCommands(&s, &to, &payload, h); err != nil {
+			p, err := cr.handleCommands(&s, &to, h)
+			if err != nil {
 				if err != errSkip {
 					fmt.Printf("%v\n", err)
 				}
 				continue
 			}
+			payload = p
 		}
 
+		// fmt.Printf("--- publishing %q to %q with payload %q\n", s, to, string(payload))
+
 		// publish
-		if err := cr.Publish(s, to); err != nil {
+		if err := cr.Publish(s, to, payload); err != nil {
 			panic(err)
 		}
 	}
@@ -250,15 +254,9 @@ OUT:
 		select {
 		case cm := <-cr.Messages:
 			printLine(cm.SenderNick, cm.Message)
-			PrintJSON(cm)
 
-		case cc := <-cr.Commands:
-			fmt.Printf("command: %v\n", cc)
-			// if err := cr.HandleRemote(cc, h); err != nil {
-			// 	fmt.Printf("handle command error: %v\n", err)
-			// 	continue
-			// }
-			continue
+		case data := <-cr.Data: // this data can be used elsewhere
+			printLine(data.SenderNick, fmt.Sprintf("%s\n", string(data.Data)))
 
 		case <-cr.quit:
 			break OUT
